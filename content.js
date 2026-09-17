@@ -139,7 +139,7 @@
     const host = document.createElement("div");
     host.dataset.copyHtmlUi = "";
     host.style.cssText =
-      "all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;";
+      "position:fixed;inset:0;width:100%;height:100%;z-index:2147483647;pointer-events:none;background:transparent;margin:0;padding:0;border:0;";
     const shadow = host.attachShadow({ mode: "closed" });
     build(shadow);
     UI_HOSTS.add(host);
@@ -396,6 +396,44 @@
     return links.join("\n");
   }
 
+  function isValidSrcsetDescriptor(desc) {
+    if (!desc) return true;
+    return /^\d+w$/.test(desc) || /^\d+(\.\d+)?x$/.test(desc);
+  }
+
+  function resolveSrcset(rawSrcset) {
+    if (!rawSrcset || typeof rawSrcset !== "string") return "";
+    if (rawSrcset.includes("[object")) return "";
+
+    const candidates = rawSrcset.split(",").map((s) => s.trim()).filter(Boolean);
+    const resolved = [];
+
+    for (const candidate of candidates) {
+      if (candidate.includes("[object")) continue;
+
+      const parts = candidate.split(/\s+/);
+      const urlPart = parts[0];
+      const descPart = parts[1] || "";
+
+      if (descPart && !isValidSrcsetDescriptor(descPart)) {
+        continue;
+      }
+
+      if (!urlPart || urlPart.includes("[object")) continue;
+
+      try {
+        const resolvedUrl = new URL(urlPart, document.baseURI).href;
+        resolved.push(descPart ? `${resolvedUrl} ${descPart}` : resolvedUrl);
+      } catch {
+        if (!urlPart.includes("[object")) {
+          resolved.push(candidate);
+        }
+      }
+    }
+
+    return resolved.join(", ");
+  }
+
   function getInlineStyledHtml(rootEl) {
     if (!(rootEl instanceof Element)) return "";
 
@@ -416,10 +454,24 @@
         return null;
       }
 
-      const clone = document.createElement(orig.tagName);
+      const isSvg = Boolean(orig.namespaceURI && orig.namespaceURI !== "http://www.w3.org/1999/xhtml");
+      const clone = isSvg
+        ? document.createElementNS(orig.namespaceURI, orig.tagName)
+        : document.createElement(orig.tagName);
+
       for (let i = 0; i < orig.attributes.length; i++) {
         const attr = orig.attributes[i];
-        clone.setAttribute(attr.name, attr.value);
+        // Skip broken attributes produced by website/framework bugs (e.g. srcset="[object Object]")
+        if (typeof attr.value === "string" && attr.value.includes("[object")) {
+          continue;
+        }
+        try {
+          if (attr.namespaceURI) {
+            clone.setAttributeNS(attr.namespaceURI, attr.name, attr.value);
+          } else {
+            clone.setAttribute(attr.name, attr.value);
+          }
+        } catch (_) {}
       }
 
       origList.push(orig);
@@ -442,40 +494,52 @@
       const clone = cloneList[i];
       const isRoot = orig === rootEl;
 
-      // 1. Resolve URLs
+      // 1. Resolve URLs safely
       if (
         orig.tagName === "IMG" ||
         orig.tagName === "VIDEO" ||
         orig.tagName === "AUDIO" ||
         orig.tagName === "SOURCE"
       ) {
-        if (orig.src) clone.setAttribute("src", orig.src);
-        if (orig.srcset) {
-          const resolvedSrcset = orig.srcset
-            .split(",")
-            .map((part) => {
-              const trimmed = part.trim();
-              const spaceIdx = trimmed.indexOf(" ");
-              if (spaceIdx === -1) {
-                try {
-                  return new URL(trimmed, document.baseURI).href;
-                } catch {
-                  return trimmed;
-                }
-              }
-              const urlPart = trimmed.slice(0, spaceIdx);
-              const descPart = trimmed.slice(spaceIdx);
-              try {
-                return new URL(urlPart, document.baseURI).href + descPart;
-              } catch {
-                return trimmed;
-              }
-            })
-            .join(", ");
-          clone.setAttribute("srcset", resolvedSrcset);
+        const rawSrc = orig.getAttribute ? orig.getAttribute("src") : orig.src;
+        if (rawSrc && !rawSrc.includes("[object")) {
+          try {
+            clone.setAttribute("src", new URL(rawSrc, document.baseURI).href);
+          } catch {
+            clone.setAttribute("src", rawSrc);
+          }
+        } else if (rawSrc && rawSrc.includes("[object")) {
+          clone.removeAttribute("src");
         }
-      } else if (orig.tagName === "A" && orig.href) {
-        clone.setAttribute("href", orig.href);
+
+        const rawSrcset = orig.getAttribute ? orig.getAttribute("srcset") : orig.srcset;
+        if (rawSrcset) {
+          const resolvedSrcset = resolveSrcset(rawSrcset);
+          if (resolvedSrcset) {
+            clone.setAttribute("srcset", resolvedSrcset);
+          } else {
+            clone.removeAttribute("srcset");
+          }
+        }
+      } else if (orig.tagName === "A" || orig.tagName === "a") {
+        let rawHref = "";
+        if (typeof orig.href === "string") {
+          rawHref = orig.href;
+        } else if (orig.href && typeof orig.href.baseVal === "string") {
+          rawHref = orig.href.baseVal;
+        } else if (orig.getAttribute) {
+          rawHref = orig.getAttribute("href") || orig.getAttribute("xlink:href") || "";
+        }
+
+        if (rawHref && !rawHref.includes("[object")) {
+          try {
+            clone.setAttribute("href", new URL(rawHref, document.baseURI).href);
+          } catch {
+            clone.setAttribute("href", rawHref);
+          }
+        } else if (rawHref && rawHref.includes("[object")) {
+          clone.removeAttribute("href");
+        }
       }
 
       // 2. Form state sync
@@ -575,6 +639,16 @@
     // Clean extension UI hosts or cursor tags if present
     docClone.querySelectorAll("[data-copy-html-ui]").forEach((el) => el.remove());
     docClone.querySelectorAll(`#${PICK_CURSOR_STYLE_ID}`).forEach((el) => el.remove());
+
+    // Clean any broken [object attributes from website/framework bugs
+    docClone.querySelectorAll("[srcset]").forEach((el) => {
+      const val = el.getAttribute("srcset");
+      if (val && val.includes("[object")) el.removeAttribute("srcset");
+    });
+    docClone.querySelectorAll("[src]").forEach((el) => {
+      const val = el.getAttribute("src");
+      if (val && val.includes("[object")) el.removeAttribute("src");
+    });
 
     // If requested, embed accessible CSS stylesheets into <style> tags
     if (withEmbeddedCss) {
