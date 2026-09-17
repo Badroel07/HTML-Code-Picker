@@ -1,14 +1,21 @@
-const MENU_ID = "copy-html";
+const MENU_ITEMS = [
+  { id: "copy-html", title: "Copy HTML code", contexts: ["all"] },
+  { id: "copy-html-css", title: "Copy HTML with CSS (Inline)", contexts: ["all"] },
+  { id: "separator-1", type: "separator", contexts: ["all"] },
+  { id: "copy-full-page", title: "Copy Full Page HTML", contexts: ["all"] },
+  { id: "copy-full-page-css", title: "Copy Full Page HTML (with CSS)", contexts: ["all"] },
+];
 
-chrome.runtime.onInstalled.addListener(() => {
+function setupContextMenus() {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: MENU_ID,
-      title: "Copy HTML code",
-      contexts: ["page", "selection", "frame"]
-    });
+    for (const item of MENU_ITEMS) {
+      chrome.contextMenus.create(item, () => void chrome.runtime.lastError);
+    }
   });
-});
+}
+
+chrome.runtime.onInstalled.addListener(setupContextMenus);
+chrome.runtime.onStartup.addListener(setupContextMenus);
 
 async function ensureContentScript(tabId) {
   try {
@@ -35,8 +42,16 @@ chrome.commands.onCommand.addListener((command) => {
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => togglePicker(tab));
 });
 
+const MENU_ACTIONS = {
+  "copy-html": "COPY_HTML",
+  "copy-html-css": "COPY_HTML_CSS",
+  "copy-full-page": "COPY_FULL_PAGE",
+  "copy-full-page-css": "COPY_FULL_PAGE_CSS",
+};
+
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== MENU_ID || !tab?.id) return;
+  const actionType = MENU_ACTIONS[info.menuItemId];
+  if (!actionType || !tab?.id) return;
   await ensureContentScript(tab.id);
-  chrome.tabs.sendMessage(tab.id, { type: "COPY_HTML" }, () => void chrome.runtime.lastError);
+  chrome.tabs.sendMessage(tab.id, { type: actionType }, () => void chrome.runtime.lastError);
 });

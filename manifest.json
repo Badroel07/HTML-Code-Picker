@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Copy HTML Code",
-  "description": "Right-click any element to copy its HTML, or toggle a picker to select multiple elements and copy them all at once.",
-  "version": "1.1.0",
+  "description": "Copy clean HTML or HTML with inline CSS from any element, select multiple elements with an interactive picker, or copy full page HTML.",
+  "version": "1.2.0",
   "permissions": ["contextMenus", "clipboardWrite", "activeTab", "scripting"],
   "background": {
     "service_worker": "background.js"
